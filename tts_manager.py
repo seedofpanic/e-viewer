@@ -110,7 +110,12 @@ class TTSManager:
                     self.last_error = error_msg
                     self.signals.error_occurred.emit(error_msg)
                     return
-                
+            
+            if self.device.type == 'cuda':
+                print("Using GPU for inference")
+            else:
+                print("Using CPU for inference")
+
             # Apply half precision for faster inference if GPU is available
             if self.use_half_precision and self.device.type == 'cuda':
                 try:
@@ -193,57 +198,11 @@ class TTSManager:
                     continue
                 
                 # Get a task from the queue
-                text, rate, volume, voice, is_save, filename = self._speech_queue.get(block=True)
+                task = self._speech_queue.get(block=True)
                 self._is_speaking = True
                 
-                # Set default values if not provided
-                speech_rate = rate if rate is not None else self.rate
-                speech_volume = volume if volume is not None else self.volume
-                selected_voice = voice if voice is not None else self.current_voice
-                
-                # Ensure we have a model
-                if not self.model:
-                    print("TTS model not loaded, skipping speech")
-                    self._is_speaking = False
-                    self._speech_queue.task_done()
-                    time.sleep(1)  # Delay to prevent tight loop
-                    continue
-                    
-                # Ensure we have a valid voice
-                if not selected_voice and self.speakers:
-                    selected_voice = self.speakers[0]
-                    print(f"No voice specified, using {selected_voice}")
-                
-                # If we have a Russian text, use Russian voice
-                has_cyrillic = any(ord('а') <= ord(c) <= ord('я') or ord('А') <= ord(c) <= ord('Я') for c in text)
-                if has_cyrillic and self._russian_voice_id and not (selected_voice and selected_voice.startswith('ru_')):
-                    selected_voice = self._russian_voice_id
-                    print(f"Detected Russian text, using voice: {selected_voice}")
-                
-                # Acquire lock
-                with self.tts_lock:
-                    try:
-                        # Process text (clean up ellipsis, etc.)
-                        processed_text = text.replace('...', ', ')
-                        
-                        # Generate audio for the entire text - no chunking
-                        audio = self._generate_audio(processed_text, selected_voice, speech_rate, speech_volume)
-                        if audio is None:
-                            raise ValueError("Failed to generate audio")
-                        
-                        if is_save and filename:
-                            # Save to file
-                            sf.write(filename, audio.numpy(), self.sample_rate)
-                            print(f"Speech saved to file: {filename}")
-                        else:
-                            # Play the audio with selected device
-                            sd.play(audio.numpy(), self.sample_rate, device=self.audio_device)
-                            sd.wait()  # Wait until audio is finished playing
-                            print("Finished speaking text")
-                            
-                    except Exception as e:
-                        print(f"Error processing speech: {str(e)}")
-                        self.signals.error_occurred.emit(str(e))
+                # Process the speech task
+                self._process_speech_task(*task)
                 
                 # Reset flag and mark task as done
                 self._is_speaking = False
@@ -259,6 +218,113 @@ class TTSManager:
                 print(f"Error in speech thread: {str(e)}")
                 self.signals.error_occurred.emit(str(e))
                 time.sleep(0.5)  # Delay to prevent tight loop if there's an error
+    
+    def _process_speech_task(self, text, rate, volume, voice, is_save, filename):
+        """Process a single speech task
+        
+        Args:
+            text: Text to be spoken
+            rate: Speed of speech (float multiplier)
+            volume: Volume level (0.0 to 1.0)
+            voice: Voice ID to use
+            is_save: Whether to save to file
+            filename: Filename to save to (if is_save is True)
+        """
+        # Set default values if not provided
+        speech_rate = rate if rate is not None else self.rate
+        speech_volume = volume if volume is not None else self.volume
+        selected_voice = voice if voice is not None else self.current_voice
+        
+        # Ensure we have a model
+        if not self.model:
+            print("TTS model not loaded, skipping speech")
+            self._is_speaking = False
+            self._speech_queue.task_done()
+            time.sleep(1)  # Delay to prevent tight loop
+            return
+            
+        # Ensure we have a valid voice
+        if not selected_voice and self.speakers:
+            selected_voice = self.speakers[0]
+            print(f"No voice specified, using {selected_voice}")
+        
+        # If we have a Russian text, use Russian voice
+        has_cyrillic = any(ord('а') <= ord(c) <= ord('я') or ord('А') <= ord(c) <= ord('Я') for c in text)
+        if has_cyrillic and self._russian_voice_id and not (selected_voice and selected_voice.startswith('ru_')):
+            selected_voice = self._russian_voice_id
+            print(f"Detected Russian text, using voice: {selected_voice}")
+        
+        # Acquire lock
+        with self.tts_lock:
+            try:
+                self.play_test(text, selected_voice, speech_rate, speech_volume, is_save, filename)
+                    
+            except Exception as e:
+                print(f"Error processing speech: {str(e)}")
+                self.signals.error_occurred.emit(str(e))
+
+    def play_test(self, text, selected_voice, speech_rate, speech_volume, is_save, filename):
+        # Process text (clean up ellipsis, etc.)
+        processed_text = text.replace('...', ', ')
+        
+        if is_save and filename:
+            # For saving to file, we need the complete audio in one piece
+            audio = self._generate_audio(processed_text, selected_voice, speech_rate, speech_volume)
+            if audio is None:
+                raise ValueError("Failed to generate audio")
+            sf.write(filename, audio.numpy(), self.sample_rate)
+            print(f"Speech saved to file: {filename}")
+        else:
+            # Split text into sentences for parallel processing
+            sentences = self._split_into_sentences(processed_text)
+            batches = self._create_batches(sentences, self.batch_size, self.chunk_size)
+            
+            # Create a queue for processed audio chunks
+            audio_queue = queue.Queue()
+            
+            # Function to process a batch and add to queue
+            def process_batch(batch):
+                batch_text = " ".join(batch)
+                chunk_audio = self._generate_audio(batch_text, selected_voice, speech_rate, speech_volume)
+                if chunk_audio is not None:
+                    audio_queue.put(chunk_audio)
+            
+            # Start processing threads for each batch
+            threads = []
+            for batch in batches:
+                thread = threading.Thread(target=process_batch, args=(batch,))
+                thread.start()
+                threads.append(thread)
+            
+            # Play audio chunks as they become available
+            chunks_played = 0
+            total_chunks = len(batches)
+            
+            while chunks_played < total_chunks:
+                try:
+                    # Get next chunk with timeout
+                    audio_chunk = audio_queue.get(timeout=0.5)
+                    
+                    # Play the chunk
+                    sd.play(audio_chunk.numpy(), self.sample_rate, device=self.audio_device)
+                    sd.wait()  # Wait until this chunk finishes playing
+                    
+                    chunks_played += 1
+                    audio_queue.task_done()
+                    
+                except queue.Empty:
+                    # No chunks ready yet, check if processing is still ongoing
+                    if all(not t.is_alive() for t in threads):
+                        # All threads finished but queue is empty, some chunks failed
+                        if chunks_played < total_chunks:
+                            print(f"Warning: Only {chunks_played}/{total_chunks} chunks were processed successfully")
+                        break
+            
+            # Wait for all processing threads to complete
+            for thread in threads:
+                thread.join()
+            
+            print("Finished speaking text")
     
     @lru_cache(maxsize=50)
     def _cached_tts(self, text, speaker):
