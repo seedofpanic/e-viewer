@@ -3,9 +3,30 @@ from unittest.mock import patch, MagicMock, mock_open, ANY
 import sys
 import os
 import tempfile
+import asyncio
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.gemini_api import GeminiAPI, GoogleAIFileManager
+
+
+def async_test(coro):
+    """Decorator for async test methods to run them in an event loop."""
+    def wrapper(*args, **kwargs):
+        new_loop = False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            new_loop = True
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        try:
+            return loop.run_until_complete(coro(*args, **kwargs))
+        finally:
+            if new_loop:
+                loop.close()
+                
+    return wrapper
 
 
 class TestGeminiAPI(unittest.TestCase):
@@ -78,6 +99,7 @@ class TestGeminiAPI(unittest.TestCase):
             self.api.create_model()
             
     @patch.object(GeminiAPI, 'create_model')
+    @async_test
     async def test_analyze_video(self, mock_create_model):
         """Test analyze_video method"""
         # Mock the model and its response
@@ -99,6 +121,7 @@ class TestGeminiAPI(unittest.TestCase):
         self.assertEqual(result, "Video analysis result")
         
     @patch.object(GeminiAPI, 'create_model')
+    @async_test
     async def test_analyze_video_with_custom_prompt(self, mock_create_model):
         """Test analyze_video method with custom prompt"""
         # Mock the model and its response
@@ -126,17 +149,24 @@ class TestGoogleAIFileManager(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures before each test method"""
         self.api_key = "test_api_key"
-        self.file_manager = GoogleAIFileManager(self.api_key)
+        # Don't create the file manager here, as we need to patch genai first
+        self.file_manager = None
         
     @patch('src.gemini_api.genai')
     def test_init(self, mock_genai):
         """Test initialization"""
+        # Create the file manager after patching genai
+        self.file_manager = GoogleAIFileManager(self.api_key)
         self.assertEqual(self.file_manager.api_key, self.api_key)
         mock_genai.configure.assert_called_once_with(api_key=self.api_key)
         
     @patch('builtins.open', new_callable=mock_open, read_data=b"test file content")
+    @async_test
     async def test_upload_file(self, mock_file):
         """Test uploadFile method"""
+        # Initialize file_manager for this test
+        self.file_manager = GoogleAIFileManager(self.api_key)
+        
         # Create a temp file path
         temp_file = os.path.join(tempfile.gettempdir(), "test_video.mp4")
         
@@ -152,8 +182,12 @@ class TestGoogleAIFileManager(unittest.TestCase):
         self.assertEqual(result["mime_type"], "video/mp4")
         
     @patch('builtins.open', new_callable=mock_open, read_data=b"test file content")
+    @async_test
     async def test_upload_file_with_options(self, mock_file):
         """Test uploadFile method with custom options"""
+        # Initialize file_manager for this test
+        self.file_manager = GoogleAIFileManager(self.api_key)
+        
         # Create a temp file path
         temp_file = os.path.join(tempfile.gettempdir(), "test_video.mp4")
         
@@ -171,8 +205,12 @@ class TestGoogleAIFileManager(unittest.TestCase):
         self.assertEqual(result["mime_type"], "video/avi")
         
     @patch('builtins.open')
+    @async_test
     async def test_upload_file_error(self, mock_file):
         """Test uploadFile method with error"""
+        # Initialize file_manager for this test
+        self.file_manager = GoogleAIFileManager(self.api_key)
+        
         # Mock an error when opening the file
         mock_file.side_effect = FileNotFoundError("File not found")
         

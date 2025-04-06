@@ -24,11 +24,11 @@ def run_tests():
     test_suite = unittest.TestSuite()
     
     # Add test cases
-    test_suite.addTest(unittest.makeSuite(TestThreadingUtils))
-    test_suite.addTest(unittest.makeSuite(TestTranslations))
-    test_suite.addTest(unittest.makeSuite(TestHotkeyInput))
-    test_suite.addTest(unittest.makeSuite(TestGeminiAPI))
-    test_suite.addTest(unittest.makeSuite(TestGoogleAIFileManager))
+    test_suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(TestThreadingUtils))
+    test_suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(TestTranslations))
+    test_suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(TestHotkeyInput))
+    test_suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(TestGeminiAPI))
+    test_suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(TestGoogleAIFileManager))
     
     # Create test runner
     test_runner = unittest.TextTestRunner(verbosity=2)

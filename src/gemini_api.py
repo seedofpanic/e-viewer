@@ -16,13 +16,12 @@ class GoogleAIFileManager:
             with open(file_path, 'rb') as file:
                 file_content = file.read()
 
-            # Extract file name for display name if not provided
-            if options and 'displayName' not in options:
-                display_name = os.path.basename(file_path)
-            else:
-                display_name = options.get(
-                    'displayName', os.path.basename(file_path))
+            # Initialize options to empty dict if None
+            if options is None:
+                options = {}
 
+            # Extract file name for display name
+            display_name = options.get('displayName', os.path.basename(file_path))
             mime_type = options.get('mimeType', 'video/mp4')
 
             # Create the file part for Gemini
