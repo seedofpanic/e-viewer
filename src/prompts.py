@@ -196,25 +196,31 @@ default_prompts = {
 prompts = []
 
 # load prompts from prompts.json
+
+
 def load_prompts(language):
     global prompts
 
     # if prompts.json doesn't exist, create it with default prompts
     if not os.path.exists(f'prompts_{language}.json'):
         with open(f'prompts_{language}.json', 'w', encoding='utf-8') as f:
-            json.dump(default_prompts[language], f, ensure_ascii=False, indent=4)
+            json.dump(default_prompts[language], f,
+                      ensure_ascii=False, indent=4)
 
     with open(f'prompts_{language}.json', 'r', encoding='utf-8') as f:
         prompts = json.load(f)
 
+
 def get_all_prompts():
     return prompts
+
 
 def get_prompt(title):
     for prompt in prompts:
         if prompt["title"] == title:
             return prompt
     return None
+
 
 def get_random_prompt():
     return random.choice(prompts)

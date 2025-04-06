@@ -68,4 +68,4 @@ TRANSLATIONS = {
         "volume_percent": "%",
         "speed_wpm": " слов/мин",
     }
-} 
+}
