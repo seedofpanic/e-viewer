@@ -17,13 +17,9 @@ from PyQt5.QtGui import QFont
 class ScreenRecorderApp(ScreenRecorderUI):
     def __init__(self):
         print("Initializing ScreenRecorderApp")
-        # Create the TTS manager first
-        self.tts_manager = TTSManager()
-        print("TTS manager created")
         
         # Initialize recorder and pass TTS manager to it
         self.recorder = ScreenRecorder()
-        self.recorder.tts_manager = self.tts_manager
         print("Recorder initialized")
         
         # Create a loading screen
@@ -32,14 +28,10 @@ class ScreenRecorderApp(ScreenRecorderUI):
         # Set up error detection
         self.tts_error_detected = False
         self.tts_error_message = ""
-        self.tts_manager.signals.error_occurred.connect(self.on_tts_error)
-        
-        # Wait for the TTS model to load before initializing the UI
-        self.wait_for_tts_model_loaded()
         
         # Initialize the UI with our recorder and TTS manager
         print("Calling UI initialization")
-        super().__init__(recorder=self.recorder, tts_manager=self.tts_manager)
+        super().__init__(recorder=self.recorder)
         print("UI initialization complete")
         
         # Will be set by main.py
@@ -96,37 +88,10 @@ class ScreenRecorderApp(ScreenRecorderUI):
         # Process events to ensure the splash screen is displayed
         QApplication.processEvents()
     
-    def on_tts_error(self, error_msg):
-        """Handle errors from the TTS manager"""
-        self.signals.video_analysis_status.emit("error")
-        print(f"TTS ERROR DETECTED: {error_msg}")
-        self.tts_error_detected = True
-        self.tts_error_message = error_msg
-        
-        # Update the loading screen to show the error
-        if hasattr(self, 'loading_label'):
-            self.loading_label.setText(f"Error loading TTS model: {error_msg}")
-            self.splash.setStyleSheet("background-color: #ffeeee; border: 1px solid #ff6666;")
-            
-            # Add a simple OK button that exits immediately
-            layout = self.splash.layout()
-            if layout.count() < 3:  # Make sure we don't add it twice
-                ok_btn = QPushButton("OK")
-                ok_btn.clicked.connect(lambda: os._exit(1))  # Force exit to restart
-                layout.addWidget(ok_btn)
-            
-            # Force UI updates
-            for i in range(10):  # Multiple processEvents calls to ensure UI updates
-                QApplication.processEvents()
-    
     def wait_for_tts_model_loaded(self):
         """Wait for the TTS model to load"""
         start_time = time.time()
         self.loading_label.setText("Loading TTS Model...")
-        
-        # Add a direct check for errors in the tts_manager if available
-        if hasattr(self.tts_manager, 'last_error') and self.tts_manager.last_error:
-            self.on_tts_error(self.tts_manager.last_error)
         
         # Poll for model load status or error
         while self.tts_manager.model is None:
@@ -312,7 +277,7 @@ class ScreenRecorderApp(ScreenRecorderUI):
         Returns:
             None
         """
-        if not (tts_enabled and commentary and self.recorder.tts_manager):
+        if not (tts_enabled and commentary and self.tts_manager):
             return
             
         # Set volume and rate if provided

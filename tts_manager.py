@@ -21,9 +21,10 @@ from functools import lru_cache
 class TTSManagerSignals(QObject):
     speech_complete = pyqtSignal()
     error_occurred = pyqtSignal(str)
+    model_loaded = pyqtSignal(str)  # Signal when a model is loaded with language code
 
 class TTSManager:
-    def __init__(self):
+    def __init__(self, language_code=None):
         """Initialize the Silero text-to-speech manager"""
         # Create signals for events
         self.signals = TTSManagerSignals()
@@ -44,6 +45,17 @@ class TTSManager:
         self.volume = 1.0  # Volume level (0.0 to 1.0)
         self.current_voice = None
         self._russian_voice_id = None
+        self._english_voice_id = None
+        self._current_language = language_code  # Default language
+        
+        # Model URLs by language
+        self.model_urls = {
+            "ru": "https://models.silero.ai/models/tts/ru/v3_1_ru.pt",
+            "en": "https://models.silero.ai/models/tts/en/v3_en.pt",
+            "de": "https://models.silero.ai/models/tts/de/v3_de.pt",
+            "es": "https://models.silero.ai/models/tts/es/v3_es.pt",
+            "fr": "https://models.silero.ai/models/tts/fr/v3_fr.pt"
+        }
         
         # Audio device settings
         self.audio_device = None  # Use default device initially
@@ -72,20 +84,36 @@ class TTSManager:
         # Loading model asynchronously to not block initialization
         threading.Thread(target=self.load_model, daemon=True).start()
         
-    def load_model(self):
-        """Load the Silero TTS model"""
+    def load_model(self, language_code=None):
+        """Load the Silero TTS model for specified language or current language
+        
+        Args:
+            language_code: Language code (e.g., 'ru', 'en') or None to use current language
+        """
         try:
-            model_path = self.models_dir / "silero_tts.pt"
-            model_url = "https://models.silero.ai/models/tts/ru/v3_1_ru.pt"
+            # Use specified language or current language
+            lang = language_code or self._current_language
+            
+            # Skip if language is not supported
+            if lang not in self.model_urls:
+                error_msg = f"Language {lang} is not supported"
+                print(error_msg)
+                self.last_error = error_msg
+                self.signals.error_occurred.emit(error_msg)
+                return
+            
+            model_url = self.model_urls[lang]
+            model_filename = f"silero_tts_{lang}.pt"
+            model_path = self.models_dir / model_filename
             
             # First check if the model exists directly in the project folder
-            project_model_path = Path("v3_1_ru.pt")
+            project_model_path = Path(f"v3_{lang}.pt" if lang != "en" else "v3_en.pt")
             if project_model_path.exists():
                 print(f"Found model in project folder: {project_model_path}")
                 model_path = project_model_path
             # Otherwise download or use the model in models directory
             elif not model_path.exists():
-                print("Downloading Silero TTS model (this may take a moment)...")
+                print(f"Downloading Silero TTS model for {lang} (this may take a moment)...")
                 try:
                     urlretrieve(model_url, model_path)
                 except Exception as e:
@@ -128,16 +156,35 @@ class TTSManager:
             # Get available speakers
             self.speakers = self.model.speakers
             
-            # Set default voice to first Russian speaker
-            russian_speakers = [s for s in self.speakers if s.startswith('ru_')]
-            self.current_voice = russian_speakers[0] if russian_speakers else self.speakers[0]
+            # Select appropriate default voice
+            if lang == "ru":
+                # Set default voice to first Russian speaker
+                russian_speakers = [s for s in self.speakers if s.startswith('ru_')]
+                self.current_voice = russian_speakers[0] if russian_speakers else self.speakers[0]
+                # Store Russian voice ID
+                if russian_speakers:
+                    self._russian_voice_id = russian_speakers[0]
+                    print(f"Found Russian voice: {self._russian_voice_id}")
+            elif lang == "en":
+                # Set default voice to first English speaker
+                english_speakers = [s for s in self.speakers if s.startswith('en_')] 
+                self.current_voice = english_speakers[0] if english_speakers else self.speakers[0]
+                # Store English voice ID
+                if english_speakers:
+                    self._english_voice_id = english_speakers[0]
+                    print(f"Found English voice: {self._english_voice_id}")
+            else:
+                # For other languages, select first voice that starts with language code
+                lang_speakers = [s for s in self.speakers if s.startswith(f'{lang}_')]
+                self.current_voice = lang_speakers[0] if lang_speakers else self.speakers[0]
+                
+            # Update current language
+            self._current_language = lang
+            print(f"Silero TTS model loaded successfully for language {lang}. Using voice: {self.current_voice}")
             
-            # Store Russian voice ID for automatic language detection
-            if russian_speakers:
-                self._russian_voice_id = russian_speakers[0]
-                print(f"Found Russian voice: {self._russian_voice_id}")
+            # Emit signal that model is loaded
+            self.signals.model_loaded.emit(lang)
             
-            print(f"Silero TTS model loaded successfully. Using voice: {self.current_voice}")
         except Exception as e:
             error_msg = f"Error loading Silero TTS model: {str(e)}"
             print(error_msg)
@@ -248,11 +295,27 @@ class TTSManager:
             selected_voice = self.speakers[0]
             print(f"No voice specified, using {selected_voice}")
         
-        # If we have a Russian text, use Russian voice
-        has_cyrillic = any(ord('а') <= ord(c) <= ord('я') or ord('А') <= ord(c) <= ord('Я') for c in text)
-        if has_cyrillic and self._russian_voice_id and not (selected_voice and selected_voice.startswith('ru_')):
-            selected_voice = self._russian_voice_id
-            print(f"Detected Russian text, using voice: {selected_voice}")
+        # Detect language from text and load appropriate model if needed
+        detected_lang = self._detect_language(text)
+        if detected_lang and detected_lang != self._current_language:
+            print(f"Detected language: {detected_lang}, current model language: {self._current_language}")
+            print("Loading appropriate language model...")
+            
+            # Switch model in a new thread to avoid blocking
+            loading_thread = threading.Thread(target=self.load_model, args=(detected_lang,), daemon=True)
+            loading_thread.start()
+            loading_thread.join()  # Wait for model loading to complete
+            
+            # Automatically select appropriate voice
+            if detected_lang == "ru" and self._russian_voice_id:
+                selected_voice = self._russian_voice_id
+            elif detected_lang == "en" and self._english_voice_id:
+                selected_voice = self._english_voice_id
+            else:
+                # Try to find a voice for the detected language
+                lang_speakers = [s for s in self.speakers if s.startswith(f'{detected_lang}_')]
+                if lang_speakers:
+                    selected_voice = lang_speakers[0]
         
         # Acquire lock
         with self.tts_lock:
@@ -263,6 +326,30 @@ class TTSManager:
                 print(f"Error processing speech: {str(e)}")
                 self.signals.error_occurred.emit(str(e))
 
+    def _detect_language(self, text):
+        """Detect language from text
+        
+        Args:
+            text: Text to detect language from
+            
+        Returns:
+            Language code (e.g., 'ru', 'en') or None if detection fails
+        """
+        if not text:
+            return None
+            
+        # Check for Cyrillic characters (Russian)
+        has_cyrillic = any(ord('а') <= ord(c) <= ord('я') or ord('А') <= ord(c) <= ord('Я') for c in text)
+        if has_cyrillic:
+            return "ru"
+            
+        # Simple language detection for other languages
+        # This is a very basic implementation - could be improved with proper language detection libraries
+        
+        # English is default if no other language is detected
+        # In a real implementation, you might want to use a proper language detection library
+        return "en"
+    
     def play_test(self, text, selected_voice, speech_rate, speech_volume, is_save, filename):
         # Process text (clean up ellipsis, etc.)
         processed_text = text.replace('...', ', ')
@@ -303,7 +390,7 @@ class TTSManager:
             while chunks_played < total_chunks:
                 try:
                     # Get next chunk with timeout
-                    audio_chunk = audio_queue.get(timeout=0.5)
+                    audio_chunk = audio_queue.get(timeout=2)
                     
                     # Play the chunk
                     sd.play(audio_chunk.numpy(), self.sample_rate, device=self.audio_device)
@@ -470,6 +557,18 @@ class TTSManager:
             self.volume = volume
         if voice is not None and self.speakers and voice in self.speakers:
             self.current_voice = voice
+            # Update language based on voice
+            if voice.startswith('ru_'):
+                self._current_language = "ru"
+                self._russian_voice_id = voice
+            elif voice.startswith('en_'):
+                self._current_language = "en"
+                self._english_voice_id = voice
+            else:
+                for lang in self.model_urls.keys():
+                    if voice.startswith(f"{lang}_"):
+                        self._current_language = lang
+                        break
         
         # Return current properties
         return self.get_tts_properties()
@@ -489,7 +588,8 @@ class TTSManager:
             'rate': self.rate,
             'volume': self.volume,
             'voice': self.current_voice,
-            'audio_device': self.audio_device
+            'audio_device': self.audio_device,
+            'language': self._current_language
         }
     
     def set_russian_voice(self):
@@ -499,18 +599,42 @@ class TTSManager:
         Returns:
             True if successful, False if no Russian voice found
         """
-        if self._russian_voice_id:
-            self.current_voice = self._russian_voice_id
-            return True
-        elif self.speakers:
-            russian_speakers = [s for s in self.speakers if s.startswith('ru_')]
-            if russian_speakers:
-                self.current_voice = russian_speakers[0]
-                self._russian_voice_id = russian_speakers[0]
-                return True
+        return self.set_language("ru")
         
-        print("No Russian voice found. Using default voice.")
-        return False
+    def set_english_voice(self):
+        """
+        Set the text-to-speech engine to use an English voice if available
+        
+        Returns:
+            True if successful, False if no English voice found
+        """
+        return self.set_language("en")
+    
+    def set_language(self, language_code):
+        """
+        Set the text-to-speech engine to use a specific language
+        
+        Args:
+            language_code: Language code (e.g., 'ru', 'en')
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if language_code not in self.model_urls:
+            print(f"Language {language_code} is not supported")
+            return False
+            
+        # Don't reload if we're already using this language
+        if language_code == self._current_language:
+            return True
+            
+        # Load appropriate model
+        loading_thread = threading.Thread(target=self.load_model, args=(language_code,), daemon=True)
+        loading_thread.start()
+        loading_thread.join()  # Wait for model loading to complete
+        
+        # Verify that it worked
+        return self._current_language == language_code
     
     def get_available_voices(self):
         """
@@ -546,6 +670,21 @@ class TTSManager:
             voice_list.append(voice_info)
             
         return voice_list
+    
+    def get_supported_languages(self):
+        """
+        Get a list of all supported languages
+        
+        Returns:
+            Dictionary of language codes and names
+        """
+        return {
+            "ru": "Russian",
+            "en": "English",
+            "de": "German",
+            "es": "Spanish",
+            "fr": "French"
+        }
         
     def save_to_file(self, text, filename):
         """

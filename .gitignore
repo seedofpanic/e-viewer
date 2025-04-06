@@ -46,4 +46,4 @@ dist/
 *.spec.in.in.in
 *.spec.in.in.in.in
 models/
-prompts.json
+*.json
