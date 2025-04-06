@@ -15,6 +15,8 @@ from src.hotkey_input import HotkeyInput
 # Create a QApplication instance for the tests
 app = QApplication.instance()
 if app is None:
+    # Use minimal platform plugin or respect the environment variable
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     app = QApplication([])
 
 
