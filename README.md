@@ -39,14 +39,32 @@ E-Viewer was primarily designed to create the experience of having a friend watc
    GEMINI_API_KEY=your_gemini_api_key_here
    ```
 
+
 ## Usage
 
-1. Run the application: `python main.py`
+1. Run the application: `python src/main.py`
 2. Click "Start Recording" to begin capturing your screen
 3. Use the "Run Analysis" button or configured hotkey to analyze your screen
 4. AI commentary will appear in the results area and be read aloud (if TTS is enabled)
 5. Adjust volume as needed using the slider
 6. Click "Stop Recording" when finished
+
+## Running Tests
+
+The application includes a comprehensive test suite. To run all tests:
+
+```
+python tests/run_tests.py
+```
+
+To run individual test modules:
+
+```
+python -m unittest tests.test_threading_utils
+python -m unittest tests.test_translations
+python -m unittest tests.test_hotkey_input
+python -m unittest tests.test_gemini_api
+```
 
 ## Getting a Google Gemini API Key
 
