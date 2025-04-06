@@ -2,6 +2,10 @@
 
 A desktop application that continuously records your screen and provides AI-powered analysis using Google's Gemini API.
 
+## Overview
+
+E-Viewer was primarily designed to create the experience of having a friend watch you play video games. The AI analyzes your gameplay in real-time, providing commentary, suggestions, and reactions as if a friend was sitting beside you during your gaming sessions.
+
 ## Features
 
 - Continuous background recording with configurable buffer
